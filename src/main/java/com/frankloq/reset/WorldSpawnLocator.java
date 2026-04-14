@@ -1,6 +1,7 @@
 package com.frankloq.reset;
 
 import net.minecraft.block.BlockState;
+import net.minecraft.block.Blocks;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.Heightmap;
@@ -62,8 +63,7 @@ public class WorldSpawnLocator {
         int y = world.getTopY(Heightmap.Type.MOTION_BLOCKING_NO_LEAVES, x, z);
         BlockPos pos = new BlockPos(x, y, z);
 
-        BlockState stateUnder = world.getBlockState(pos.down());
-        if (stateUnder.isSolidBlock(world, pos.down()) && world.getFluidState(pos.down()).isEmpty()) {
+        if (isValidSpawnBlock(world, pos)) {
             return pos;
         }
 
@@ -90,13 +90,34 @@ public class WorldSpawnLocator {
 
             BlockPos fuzzyPos = new BlockPos(x, y, z);
 
-            BlockState stateUnder = world.getBlockState(fuzzyPos.down());
-            if (stateUnder.isSolidBlock(world, fuzzyPos.down()) && world.getFluidState(fuzzyPos.down()).isEmpty()) {
+            if (isValidSpawnBlock(world, fuzzyPos)) {
                 return fuzzyPos;
             }
         }
 
         // Exact center, clamped at sea level so they don't fall.
         return new BlockPos(worldSpawn.getX(), Math.max(worldSpawn.getY(), 63), worldSpawn.getZ());
+    }
+
+    // Definitive fix for the player spawning crawling or in dangerous blocks
+    private static boolean isValidSpawnBlock(ServerWorld world, BlockPos pos) {
+        BlockState under = world.getBlockState(pos.down());
+        BlockState feet = world.getBlockState(pos);
+        BlockState head = world.getBlockState(pos.up());
+
+        // The floor must be a solid block and not water or lava
+        if (!under.isSolidBlock(world, pos.down()) || !world.getFluidState(pos.down()).isEmpty()) {
+            return false;
+        }
+
+        // No dangerous blocks allowed. Reject powder snow, magma and cactus
+        if (under.isOf(Blocks.POWDER_SNOW) || feet.isOf(Blocks.POWDER_SNOW) || head.isOf(Blocks.POWDER_SNOW)) return false;
+        if (under.isOf(Blocks.MAGMA_BLOCK) || under.isOf(Blocks.CACTUS) || under.isOf(Blocks.CAMPFIRE)) return false;
+
+        // The crawling prevention, the collision shape for the feet and head must be completely empty
+        if (!feet.getCollisionShape(world, pos).isEmpty()) return false;
+        if (!head.getCollisionShape(world, pos.up()).isEmpty()) return false;
+
+        return true;
     }
 }

@@ -30,15 +30,14 @@ public class PlayerRespawner {
 
         for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
 
-            for (net.minecraft.advancement.Advancement advancement : server.getAdvancementLoader().getAdvancements()) {
-                net.minecraft.advancement.AdvancementProgress progress = player.getAdvancementTracker().getProgress(advancement);
+            // Use AdvancementEntry instead of Advancement for it to work in 1.20.2
+            for (net.minecraft.advancement.AdvancementEntry advancementEntry : server.getAdvancementLoader().getAdvancements()) {
+                net.minecraft.advancement.AdvancementProgress progress = player.getAdvancementTracker().getProgress(advancementEntry);
                 if (progress.isAnyObtained()) {
-                    // Create a safe snapshot of the criteria to avoid concurrent modification crashes
                     java.util.List<String> obtainedCriteria = new java.util.ArrayList<>();
                     progress.getObtainedCriteria().forEach(obtainedCriteria::add);
-
                     for (String criterion : obtainedCriteria) {
-                        player.getAdvancementTracker().revokeCriterion(advancement, criterion);
+                        player.getAdvancementTracker().revokeCriterion(advancementEntry, criterion);
                     }
                 }
             }
