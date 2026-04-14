@@ -295,7 +295,7 @@ public class WorldResetManager {
 
             if (!Files.exists(levelDatPath)) return false;
 
-            NbtCompound root = NbtIo.readCompressed(levelDatPath.toFile());
+            NbtCompound root = NbtIo.readCompressed(levelDatPath, net.minecraft.nbt.NbtSizeTracker.ofUnlimitedBytes());
             NbtCompound data = root.getCompound("Data");
 
             if (data.contains("RandomSeed")) data.putLong("RandomSeed", seed);
@@ -311,7 +311,7 @@ public class WorldResetManager {
 
             root.put("Data", data);
             Files.copy(levelDatPath, rootPath.resolve("level.dat_old"), StandardCopyOption.REPLACE_EXISTING);
-            NbtIo.writeCompressed(root, levelDatPath.toFile());
+            NbtIo.writeCompressed(root, levelDatPath);
             return true;
         } catch (IOException e) {
             return false;
