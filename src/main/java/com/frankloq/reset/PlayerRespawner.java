@@ -47,9 +47,7 @@ public class PlayerRespawner {
             player.experienceProgress = 0.0f;
             player.totalExperience = 0;
 
-            for (StatusEffectInstance effect : player.getStatusEffects()) {
-                player.removeStatusEffect(effect.getEffectType());
-            }
+            player.clearStatusEffects();
 
             player.setHealth(20.0f);
             player.getHungerManager().setFoodLevel(20);

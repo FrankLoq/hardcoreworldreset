@@ -159,6 +159,32 @@ public class WorldResetManager {
             }
         }
 
+        // Fix for spawn chunks not removing correctly and causing corruption in 1.20.6
+        ServerWorld overworld = server.getWorld(World.OVERWORLD);
+        if (overworld != null) {
+            // Revoke the permanent spawn chunks memory lock from the old world
+            overworld.getChunkManager().removeTicket(
+                    net.minecraft.server.world.ChunkTicketType.START,
+                    new net.minecraft.util.math.ChunkPos(overworld.getSpawnPos()),
+                    11,
+                    net.minecraft.util.Unit.INSTANCE
+            );
+
+            // Force the chunk manager to process the unload queue 50 times
+            // This evicts the old spawn chunks out of the live ram and pushes them into the background pending save queue
+            net.minecraft.server.world.ServerChunkManager manager = overworld.getChunkManager();
+            for (int i = 0; i < 50; i++) {
+                manager.tick(() -> false, true);
+            }
+
+            // Force the server to instantly flush all background saving tasks to the disk
+            // The true parameters make the main server freeze and wait until the background workers are fully empty
+            server.saveAll(true, true, true);
+
+            // Force Java garbage collector to remove any lingering old chunk objects
+            System.gc();
+        }
+
         Path worldFolder = getWorldFolder(server);
         if (worldFolder != null) {
             deleteFolder(worldFolder.resolve("region"));
