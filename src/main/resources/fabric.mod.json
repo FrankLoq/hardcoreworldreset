@@ -1,0 +1,27 @@
+{
+	"schemaVersion": 1,
+	"id": "hardcoreworldreset",
+	"version": "${version}",
+	"name": "HardcoreWorldReset",
+	"description": "Erases the world and creates a new one each time a player dies.",
+	"authors": ["FrankLoq"],
+	"license": "CC0-1.0",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"com.frankloq.HardcoreWorldReset"
+		]
+	},
+	"mixins": [
+		"hardcoreworldreset.mixins.json"
+	],
+	"depends": {
+		"fabricloader": ">=0.14.21",
+		"minecraft": [
+			"1.20",
+			"1.20.1"
+		],
+		"java": ">=17",
+		"fabric-api": "*"
+	}
+}

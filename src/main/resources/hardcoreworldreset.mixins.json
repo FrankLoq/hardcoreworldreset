@@ -1,0 +1,14 @@
+{
+	"required": true,
+	"minVersion": "0.8",
+	"package": "com.frankloq.mixin",
+	"compatibilityLevel": "JAVA_16",
+	"mixins": [
+		"PlayerDeathMixin",
+		"PlayerLoginMixin"
+	],
+	"client": [],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}
