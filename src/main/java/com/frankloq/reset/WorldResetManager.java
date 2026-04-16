@@ -115,35 +115,30 @@ public class WorldResetManager {
         HardcoreWorldReset.LOGGER.info("Starting true world reset. New seed: {}", newSeed);
         server.getPlayerManager().broadcast(Text.literal("§5[Reset] §7Beginning world erasure..."), false);
 
+        // Teleport everyone to Limbo before the unloading phase starts
+        for (net.minecraft.server.network.ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
+            com.frankloq.LimboDimension.teleportToLimbo(player);
+        }
+
         advanceTo(ResetPhase.UNLOADING);
     }
 
+    // Had to all of this as well for 1.21 compatibility
     private static void executeUnloadPhase(MinecraftServer server) {
         HardcoreWorldReset.LOGGER.info("Phase: UNLOADING");
         server.getPlayerManager().broadcast(Text.literal("§5[Reset] §7Unloading memory cache..."), false);
 
+        // Get rid of entities
         for (RegistryKey<World> key : WorldUnloader.RESET_DIMENSIONS) {
             ServerWorld world = server.getWorld(key);
             if (world != null) WorldInjectionUtils.clearAllEntities(world);
         }
 
-        ServerWorld overworld = server.getWorld(World.OVERWORLD);
-        if (overworld != null) {
-            overworld.getChunkManager().removeTicket(
-                    ChunkTicketType.START, new ChunkPos(overworld.getSpawnPos()), 11, Unit.INSTANCE
-            );
-        }
+        // Force save to pack the chunks securely to disk
+        server.saveAll(true, true, true);
 
-        for (RegistryKey<World> key : WorldUnloader.RESET_DIMENSIONS) {
-            ServerWorld world = server.getWorld(key);
-            if (world == null) continue;
-
-            ServerChunkManager manager = world.getChunkManager();
-            try { world.save(null, true, false); } catch (Exception e) {}
-
-            for (int i = 0; i < 50; i++) manager.tick(() -> false, true);
-        }
-
+        // Advance to the deleting phase after 40 ticks
+        // This wait perfectly ensures no dropped items are ticking when we wipe the ram.
         advanceTo(ResetPhase.DELETING);
     }
 
@@ -154,59 +149,43 @@ public class WorldResetManager {
         for (RegistryKey<World> key : WorldUnloader.RESET_DIMENSIONS) {
             ServerWorld world = server.getWorld(key);
             if (world != null) {
-                try { world.getChunkManager().save(true); } catch (Exception ignored) {}
+                // Now we clear the main RAM and it doesn't crash because entities are dead
+                WorldInjectionUtils.lobotomizeChunkManager(world);
+
+                // Clear the io buffer too
+                WorldInjectionUtils.lobotomizeStorageIO(world);
+
+                // Rip the file handles away from OS
                 WorldInjectionUtils.forceCloseRegionFiles(world);
             }
         }
 
-        // Fix for spawn chunks not removing correctly and causing corruption in 1.20.6
-        ServerWorld overworld = server.getWorld(World.OVERWORLD);
-        if (overworld != null) {
-            // Revoke the permanent spawn chunks memory lock from the old world
-            overworld.getChunkManager().removeTicket(
-                    net.minecraft.server.world.ChunkTicketType.START,
-                    new net.minecraft.util.math.ChunkPos(overworld.getSpawnPos()),
-                    11,
-                    net.minecraft.util.Unit.INSTANCE
-            );
-
-            // Force the chunk manager to process the unload queue 50 times
-            // This evicts the old spawn chunks out of the live ram and pushes them into the background pending save queue
-            net.minecraft.server.world.ServerChunkManager manager = overworld.getChunkManager();
-            for (int i = 0; i < 50; i++) {
-                manager.tick(() -> false, true);
-            }
-
-            // Force the server to instantly flush all background saving tasks to the disk
-            // The true parameters make the main server freeze and wait until the background workers are fully empty
-            server.saveAll(true, true, true);
-
-            // Force Java garbage collector to remove any lingering old chunk objects
-            System.gc();
-        }
-
         Path worldFolder = getWorldFolder(server);
         if (worldFolder != null) {
-            deleteFolder(worldFolder.resolve("region"));
-            deleteFolder(worldFolder.resolve("entities"));
-            deleteFolder(worldFolder.resolve("poi"));
+            for (RegistryKey<World> key : WorldUnloader.RESET_DIMENSIONS) {
+                Path dimPath;
+                if (key == World.OVERWORLD) dimPath = worldFolder;
+                else if (key == World.NETHER) dimPath = worldFolder.resolve("DIM-1");
+                else if (key == World.END) dimPath = worldFolder.resolve("DIM1");
+                else dimPath = worldFolder.resolve("dimensions").resolve(key.getValue().getNamespace()).resolve(key.getValue().getPath());
+
+                deleteFolder(dimPath.resolve("region"));
+                deleteFolder(dimPath.resolve("poi"));
+                deleteFolder(dimPath.resolve("entities"));
+            }
+
+            HardcoreWorldReset.LOGGER.info("Wiping player data, stats, and advancements...");
             deleteFolder(worldFolder.resolve("advancements"));
             deleteFolder(worldFolder.resolve("stats"));
             deleteFolder(worldFolder.resolve("playerdata"));
 
             try {
-                Files.createDirectories(worldFolder.resolve("playerdata"));
-                Files.createDirectories(worldFolder.resolve("advancements"));
-                Files.createDirectories(worldFolder.resolve("stats"));
-            } catch (Exception ignored) {}
-
-            deleteFolder(worldFolder.resolve("DIM-1").resolve("region"));
-            deleteFolder(worldFolder.resolve("DIM-1").resolve("entities"));
-            deleteFolder(worldFolder.resolve("DIM-1").resolve("poi"));
-
-            deleteFolder(worldFolder.resolve("DIM1").resolve("region"));
-            deleteFolder(worldFolder.resolve("DIM1").resolve("entities"));
-            deleteFolder(worldFolder.resolve("DIM1").resolve("poi"));
+                java.nio.file.Files.createDirectories(worldFolder.resolve("advancements"));
+                java.nio.file.Files.createDirectories(worldFolder.resolve("stats"));
+                java.nio.file.Files.createDirectories(worldFolder.resolve("playerdata"));
+            } catch (java.io.IOException e) {
+                HardcoreWorldReset.LOGGER.error("Failed to recreate player folders!", e);
+            }
         }
 
         advanceTo(ResetPhase.REGENERATING);
@@ -236,7 +215,7 @@ public class WorldResetManager {
                 );
 
                 injectByType(manager, NoiseConfig.class, newConfig);
-                injectByType(manager.threadedAnvilChunkStorage, NoiseConfig.class, newConfig);
+                injectByType(manager.chunkLoadingManager, NoiseConfig.class, newConfig);
 
                 try {
                     net.minecraft.world.gen.chunk.placement.StructurePlacementCalculator newCalculator =
@@ -244,7 +223,7 @@ public class WorldResetManager {
                                     server.getRegistryManager().getWrapperOrThrow(RegistryKeys.STRUCTURE_SET),
                                     newConfig, newSeed
                             );
-                    injectByType(manager.threadedAnvilChunkStorage, net.minecraft.world.gen.chunk.placement.StructurePlacementCalculator.class, newCalculator);
+                    injectByType(manager.chunkLoadingManager, net.minecraft.world.gen.chunk.placement.StructurePlacementCalculator.class, newCalculator);
                 } catch (Exception e) {}
             }
 
@@ -269,8 +248,12 @@ public class WorldResetManager {
 
         ServerWorld overworld = server.getWorld(World.OVERWORLD);
         if (overworld != null) {
+            int spawnRadius = server.getGameRules().getInt(net.minecraft.world.GameRules.SPAWN_CHUNK_RADIUS);
             overworld.getChunkManager().addTicket(
-                    ChunkTicketType.START, new ChunkPos(overworld.getSpawnPos()), 11, Unit.INSTANCE
+                    net.minecraft.server.world.ChunkTicketType.START,
+                    new net.minecraft.util.math.ChunkPos(overworld.getSpawnPos()),
+                    spawnRadius,
+                    net.minecraft.util.Unit.INSTANCE
             );
         }
 
@@ -352,9 +335,15 @@ public class WorldResetManager {
         if (!Files.exists(path)) return;
         try (Stream<Path> walk = Files.walk(path)) {
             walk.sorted(Comparator.reverseOrder()).forEach(p -> {
-                try { Files.delete(p); } catch (IOException ignored) {}
+                try {
+                    Files.delete(p);
+                } catch (IOException e) {
+                    HardcoreWorldReset.LOGGER.error("windows won't fucking allow this file to removed bc is a lil child: " + p.getFileName(), e);
+                }
             });
-        } catch (IOException ignored) {}
+        } catch (IOException e) {
+            HardcoreWorldReset.LOGGER.error("Failed to read folder: " + path, e);
+        }
     }
 
     private static void advanceTo(ResetPhase phase) {

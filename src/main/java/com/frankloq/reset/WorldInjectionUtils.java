@@ -43,7 +43,7 @@ public class WorldInjectionUtils {
             ServerChunkManager chunkManager = world.getChunkManager();
 
             // Block and POI chunks
-            deepClose(chunkManager.threadedAnvilChunkStorage, 0, new HashSet<>());
+            deepClose(chunkManager.chunkLoadingManager, 0, new HashSet<>());
             deepClose(chunkManager.getPointOfInterestStorage(), 0, new HashSet<>());
 
             // Entity chunks
@@ -155,5 +155,118 @@ public class WorldInjectionUtils {
                 }
             }
         } catch (Exception e) {}
+    }
+
+    // New way of getting rid of the chunks for 1.21 specifically...
+    public static void lobotomizeChunkManager(ServerWorld world) {
+        try {
+            net.minecraft.server.world.ServerChunkManager chunkManager = world.getChunkManager();
+
+            // Wipe chunk holders from the ram
+            Object chunkLoadingManager = chunkManager.chunkLoadingManager;
+            for (Field field : chunkLoadingManager.getClass().getDeclaredFields()) {
+                if (field.getType().getName().contains("Long2ObjectLinkedOpenHashMap") ||
+                        field.getType().getName().contains("Long2ObjectOpenHashMap")) {
+                    field.setAccessible(true);
+                    Object map = field.get(chunkLoadingManager);
+                    if (map != null) {
+                        try { map.getClass().getMethod("clear").invoke(map); } catch (Exception ignored) {}
+                    }
+                }
+            }
+
+            Object ticketManager = null;
+            for (Field field : net.minecraft.server.world.ServerChunkManager.class.getDeclaredFields()) {
+                if (field.getType().getSimpleName().equals("ChunkTicketManager")) {
+                    field.setAccessible(true);
+                    ticketManager = field.get(chunkManager);
+                    break;
+                }
+            }
+
+            if (ticketManager != null) {
+                deepClearTicketEngine(ticketManager, 0);
+            }
+        } catch (Exception e) {
+            com.frankloq.HardcoreWorldReset.LOGGER.error("ram lobotomy miserably failed", e);
+        }
+    }
+
+    // This helper method hunts down and destroys the cached chunk distance math
+    private static void deepClearTicketEngine(Object obj, int depth) {
+        if (obj == null || depth > 5) return;
+        Class<?> currentClass = obj.getClass();
+
+        // If it's a map or set, clear it to reset the math, and stop digging deeper
+        try {
+            Method clearMethod = currentClass.getMethod("clear");
+            clearMethod.invoke(obj);
+            return;
+        } catch (Exception ignored) {}
+
+        // Dig through the classes to clear all math caches
+        String name = currentClass.getName();
+        if (name.contains("TicketManager") || name.contains("Propagator") || name.contains("Tracker") || name.contains("Updater")) {
+            while (currentClass != Object.class && currentClass != null) {
+                for (Field field : currentClass.getDeclaredFields()) {
+                    if (java.lang.reflect.Modifier.isStatic(field.getModifiers())) continue;
+                    if (field.getType().isPrimitive()) continue;
+                    try {
+                        field.setAccessible(true);
+                        Object child = field.get(obj);
+                        deepClearTicketEngine(child, depth + 1);
+                    } catch (Exception ignored) {}
+                }
+                currentClass = currentClass.getSuperclass();
+            }
+        }
+    }
+
+    public static void lobotomizeStorageIO(ServerWorld world) {
+        try {
+            net.minecraft.server.world.ServerChunkManager manager = world.getChunkManager();
+            Object chunkLoadingManager = manager.chunkLoadingManager;
+
+            // Target the chunk StorageIoWorker
+            Object chunkWorker = null;
+            for (Field field : chunkLoadingManager.getClass().getDeclaredFields()) {
+                if (field.getType().getSimpleName().equals("StorageIoWorker")) {
+                    field.setAccessible(true);
+                    chunkWorker = field.get(chunkLoadingManager);
+                    break;
+                }
+            }
+
+            // Target the poi StorageIoWorker (this prevents ghost structures)
+            Object poiStorage = world.getPointOfInterestStorage();
+            Object poiWorker = null;
+            if (poiStorage != null) {
+                for (Field field : poiStorage.getClass().getDeclaredFields()) {
+                    if (field.getType().getSimpleName().equals("StorageIoWorker")) {
+                        field.setAccessible(true);
+                        poiWorker = field.get(poiStorage);
+                        break;
+                    }
+                }
+            }
+
+            // Clear every cache, write-queue, and map inside the io workers
+            Object[] workers = {chunkWorker, poiWorker};
+            for (Object worker : workers) {
+                if (worker == null) continue;
+                for (Field field : worker.getClass().getDeclaredFields()) {
+                    field.setAccessible(true);
+                    Object cacheObj = field.get(worker);
+                    if (cacheObj != null) {
+                        try {
+                            // This instantly deletes the Map<ChunkPos, NbtCompound> buffers
+                            cacheObj.getClass().getMethod("clear").invoke(cacheObj);
+                        } catch (Exception ignored) {}
+                    }
+                }
+            }
+        } catch (Exception e) {
+            com.frankloq.HardcoreWorldReset.LOGGER.error("storage io lobotomy failed miserably", e);
+        }
     }
 }
