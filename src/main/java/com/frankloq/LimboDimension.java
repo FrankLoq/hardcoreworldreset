@@ -1,6 +1,5 @@
 package com.frankloq;
 
-import net.fabricmc.fabric.api.dimension.v1.FabricDimensions;
 import net.minecraft.registry.RegistryKey;
 import net.minecraft.registry.RegistryKeys;
 import net.minecraft.server.MinecraftServer;
@@ -15,7 +14,7 @@ public class LimboDimension {
 
     public static final RegistryKey<World> LIMBO_KEY = RegistryKey.of(
             RegistryKeys.WORLD,
-            new Identifier(HardcoreWorldReset.MOD_ID, "limbo")
+            Identifier.of(HardcoreWorldReset.MOD_ID, "limbo")
     );
 
     // Teleports the players to the Limbo dimension
@@ -45,17 +44,25 @@ public class LimboDimension {
             return false;
         }
 
-        // Use FabricDimensions for safe cross-dimension teleportation
-        FabricDimensions.teleport(
-                player,
+        // We use now 1.21 native teleportation instead of FabricDimensions
+        player.teleportTo(new net.minecraft.world.TeleportTarget(
                 limboWorld,
-                new TeleportTarget(
-                        new Vec3d(0.5, 64.0, 0.5),  // position
-                        Vec3d.ZERO,                   // velocity (none)
-                        0f,                           // yaw
-                        0f                            // pitch
-                )
-        );
+                new net.minecraft.util.math.Vec3d(0, 65, 0),
+                net.minecraft.util.math.Vec3d.ZERO,
+                0.0f,
+                0.0f,
+                entity -> {
+                    // I kinda liked the sound effect of traveling to the Nether of FabricDimensions so lets add it manually here
+                    if (entity instanceof ServerPlayerEntity p) {
+                        p.playSoundToPlayer(
+                                net.minecraft.sound.SoundEvents.BLOCK_PORTAL_TRAVEL,
+                                net.minecraft.sound.SoundCategory.MASTER,
+                                0.5f,
+                                1.0f
+                        );
+                    }
+                }
+        ));
 
         HardcoreWorldReset.LOGGER.info(
                 "Teleported {} to Limbo.",
