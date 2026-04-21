@@ -255,6 +255,25 @@ public class WorldResetManager {
                     spawnRadius,
                     net.minecraft.util.Unit.INSTANCE
             );
+
+            net.minecraft.util.math.BlockPos spawnPos = overworld.getSpawnPos();
+            for (net.minecraft.server.network.ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
+                if (player.getServerWorld().getRegistryKey() == com.frankloq.LimboDimension.LIMBO_KEY) {
+
+                    // Force wipe their RAM cache
+                    com.frankloq.reset.WorldInjectionUtils.wipePlayerState(player);
+
+                    // Teleport the player
+                    player.teleport(
+                            overworld,
+                            spawnPos.getX() + 0.5,
+                            spawnPos.getY(),
+                            spawnPos.getZ() + 0.5,
+                            0.0f,
+                            0.0f
+                    );
+                }
+            }
         }
 
         // I'm trying to optimize ram usage but idk if it's gonna do something
