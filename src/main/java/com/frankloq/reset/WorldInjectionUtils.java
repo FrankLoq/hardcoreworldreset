@@ -35,7 +35,8 @@ public class WorldInjectionUtils {
                     }
                 }
             }
-        } catch (Exception e) {}
+        } catch (Exception e) {
+        }
     }
 
     public static void forceCloseRegionFiles(ServerWorld world) {
@@ -57,7 +58,8 @@ public class WorldInjectionUtils {
             }
             if (entityManager != null) deepClose(entityManager, 0, new HashSet<>());
 
-        } catch (Exception e) {}
+        } catch (Exception e) {
+        }
     }
 
     private static void deepClose(Object target, int depth, Set<Object> visited) {
@@ -89,7 +91,8 @@ public class WorldInjectionUtils {
                     if (value != null) {
                         deepClose(value, depth + 1, visited);
                     }
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                }
             }
             current = current.getSuperclass();
         }
@@ -116,7 +119,8 @@ public class WorldInjectionUtils {
                     break;
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
     }
 
     public static void clearAllEntities(ServerWorld world) {
@@ -127,7 +131,10 @@ public class WorldInjectionUtils {
             }
         }
         for (net.minecraft.entity.Entity entity : entitiesToRemove) {
-            try { entity.discard(); } catch (Exception ignored) {}
+            try {
+                entity.discard();
+            } catch (Exception ignored) {
+            }
         }
     }
 
@@ -154,6 +161,172 @@ public class WorldInjectionUtils {
                     }
                 }
             }
-        } catch (Exception e) {}
+        } catch (Exception e) {
+        }
+    }
+
+    // New way of getting rid of the chunks for 1.21 specifically...
+    public static void lobotomizeChunkManager(ServerWorld world) {
+        try {
+            net.minecraft.server.world.ServerChunkManager chunkManager = world.getChunkManager();
+
+            // Wipe chunk holders from the ram
+            Object tacs = chunkManager.threadedAnvilChunkStorage;
+            for (Field field : tacs.getClass().getDeclaredFields()) {
+                if (field.getType().getName().contains("Long2ObjectLinkedOpenHashMap") ||
+                        field.getType().getName().contains("Long2ObjectOpenHashMap")) {
+                    field.setAccessible(true);
+                    Object map = field.get(tacs);
+                    if (map != null) {
+                        try { map.getClass().getMethod("clear").invoke(map); } catch (Exception ignored) {}
+                    }
+                }
+            }
+
+            Object ticketManager = null;
+            for (Field field : net.minecraft.server.world.ServerChunkManager.class.getDeclaredFields()) {
+                if (field.getType().getSimpleName().equals("ChunkTicketManager")) {
+                    field.setAccessible(true);
+                    ticketManager = field.get(chunkManager);
+                    break;
+                }
+            }
+
+            if (ticketManager != null) {
+                deepClearTicketEngine(ticketManager, 0);
+            }
+        } catch (Exception e) {
+            com.frankloq.HardcoreWorldReset.LOGGER.error("RAM Lobotomy failed!", e);
+        }
+    }
+
+    // This helper method hunts down and destroys the cached chunk distance math
+    private static void deepClearTicketEngine(Object obj, int depth) {
+        if (obj == null || depth > 5) return;
+        Class<?> currentClass = obj.getClass();
+
+        // If it's a map or set, clear it to reset the math, and stop digging deeper
+        try {
+            Method clearMethod = currentClass.getMethod("clear");
+            clearMethod.invoke(obj);
+            return;
+        } catch (Exception ignored) {}
+
+        // Dig through the classes to clear all math caches
+        String name = currentClass.getName();
+        if (name.contains("TicketManager") || name.contains("Propagator") || name.contains("Tracker") || name.contains("Updater")) {
+            while (currentClass != Object.class && currentClass != null) {
+                for (Field field : currentClass.getDeclaredFields()) {
+                    if (java.lang.reflect.Modifier.isStatic(field.getModifiers())) continue;
+                    if (field.getType().isPrimitive()) continue;
+                    try {
+                        field.setAccessible(true);
+                        Object child = field.get(obj);
+                        deepClearTicketEngine(child, depth + 1);
+                    } catch (Exception ignored) {}
+                }
+                currentClass = currentClass.getSuperclass();
+            }
+        }
+    }
+
+    public static void lobotomizeStorageIO(ServerWorld world) {
+        try {
+            net.minecraft.server.world.ServerChunkManager manager = world.getChunkManager();
+
+            // In 1.20.6 the IO worker is inside threadedAnvilChunkStorage
+            Object tacs = manager.threadedAnvilChunkStorage;
+
+            // Target the poi StorageIoWorker (this prevents ghost structures)
+            Object chunkWorker = null;
+            for (Field field : tacs.getClass().getDeclaredFields()) {
+                if (field.getType().getSimpleName().equals("StorageIoWorker")) {
+                    field.setAccessible(true);
+                    chunkWorker = field.get(tacs);
+                    break;
+                }
+            }
+
+            // Target the poi StorageIoWorker (this prevents ghost structures)
+            Object poiStorage = world.getPointOfInterestStorage();
+            Object poiWorker = null;
+            if (poiStorage != null) {
+                for (Field field : poiStorage.getClass().getDeclaredFields()) {
+                    if (field.getType().getSimpleName().equals("StorageIoWorker")) {
+                        field.setAccessible(true);
+                        poiWorker = field.get(poiStorage);
+                        break;
+                    }
+                }
+            }
+
+            // Clear every cache, write-queue, and map inside the io workers
+            Object[] workers = {chunkWorker, poiWorker};
+            for (Object worker : workers) {
+                if (worker == null) continue;
+                for (Field field : worker.getClass().getDeclaredFields()) {
+                    field.setAccessible(true);
+                    Object cacheObj = field.get(worker);
+                    if (cacheObj != null) {
+                        try {
+                            // This instantly deletes the Map<ChunkPos, NbtCompound> buffers
+                            cacheObj.getClass().getMethod("clear").invoke(cacheObj);
+                        } catch (Exception ignored) {}
+                    }
+                }
+            }
+        } catch (Exception e) {
+            com.frankloq.HardcoreWorldReset.LOGGER.error("storage io lobotomy failed miserably", e);
+        }
+    }
+
+    public static void wipePlayerState(net.minecraft.server.network.ServerPlayerEntity player) {
+        player.changeGameMode(net.minecraft.world.GameMode.SURVIVAL);
+
+        player.getInventory().clear();
+        player.getEnderChestInventory().clear();
+
+        player.experienceLevel = 0;
+        player.experienceProgress = 0.0f;
+        player.setScore(0);
+
+        player.setHealth(player.getMaxHealth());
+        player.getHungerManager().setFoodLevel(20);
+        player.getHungerManager().setSaturationLevel(5.0f);
+        player.clearStatusEffects();
+
+        player.extinguish();
+
+        // Compatibility for Trinkets mod
+        if (net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("trinkets")) {
+            try {
+                // Find the Trinkets API class
+                Class<?> trinketsApi = Class.forName("dev.emi.trinkets.api.TrinketsApi");
+                java.lang.reflect.Method getComponent = trinketsApi.getMethod("getTrinketComponent", net.minecraft.entity.LivingEntity.class);
+
+                // Get the player's Trinket component
+                java.util.Optional<?> opt = (java.util.Optional<?>) getComponent.invoke(null, player);
+
+                if (opt.isPresent()) {
+                    Object trinketComponent = opt.get();
+                    java.lang.reflect.Method getInventory = trinketComponent.getClass().getMethod("getInventory");
+
+                    // Trinkets stores items in a Map<String, Map<String, TrinketInventory>>
+                    java.util.Map<?, ?> inventoryMap = (java.util.Map<?, ?>) getInventory.invoke(trinketComponent);
+
+                    // Loop through all custom accessory slots and clear them
+                    for (Object groupMapObj : inventoryMap.values()) {
+                        java.util.Map<?, ?> groupMap = (java.util.Map<?, ?>) groupMapObj;
+                        for (Object trinketInvObj : groupMap.values()) {
+                            if (trinketInvObj instanceof net.minecraft.inventory.Inventory) {
+                                ((net.minecraft.inventory.Inventory) trinketInvObj).clear();
+                            }
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                com.frankloq.HardcoreWorldReset.LOGGER.error("not wiping allat", e);
+            }
+        }
     }
 }
