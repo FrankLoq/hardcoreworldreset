@@ -1,19 +1,24 @@
 package com.frankloq;
 
+import com.frankloq.LimboDimension;
 import com.frankloq.reset.PlayerRespawner;
 import com.frankloq.reset.WorldResetManager;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import static net.minecraft.server.command.CommandManager.literal;
 import net.minecraft.entity.damage.DamageSource;
 import net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket;
 import net.minecraft.network.packet.s2c.play.HealthUpdateS2CPacket;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.Text;
+import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.GameMode;
+import net.minecraft.world.World;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,6 +30,7 @@ public class HardcoreWorldReset implements ModInitializer {
 	private static boolean resetInProgress = false;
 	private static int limboCountdownTicks = -1;
 	private static boolean modEnabled = true;
+	private static final java.util.Map<net.minecraft.server.network.ServerPlayerEntity, Integer> rescueQueue = new java.util.HashMap<>();
 
 	public static boolean isModEnabled() { return modEnabled; }
 
@@ -94,9 +100,65 @@ public class HardcoreWorldReset implements ModInitializer {
 							}))
 			);
 		});
+
+		// Fix for player getting stuck in the Limbo if they leave after the DELETING phase
+		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
+			net.minecraft.server.network.ServerPlayerEntity player = handler.player;
+
+			// Check if the player logging in is trapped in Limbo
+			if (player.getServerWorld().getRegistryKey() == com.frankloq.LimboDimension.LIMBO_KEY) {
+				// Give blindness so they don't see the void
+				player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
+						net.minecraft.entity.effect.StatusEffects.BLINDNESS, 40, 1, false, false, false
+				));
+
+				// Add them to the rescue queue with a 20 tick delay
+				rescueQueue.put(player, 20);
+				HardcoreWorldReset.LOGGER.info("Player " + player.getName().getString() + " detected in Limbo. Rescue arriving in 1 second...");
+			}
+		});
 	}
 
 	private void onServerTick(MinecraftServer server) {
+		// Process rescue queue
+		if (!rescueQueue.isEmpty()) {
+			java.util.Iterator<java.util.Map.Entry<net.minecraft.server.network.ServerPlayerEntity, Integer>> iterator = rescueQueue.entrySet().iterator();
+
+			while (iterator.hasNext()) {
+				java.util.Map.Entry<net.minecraft.server.network.ServerPlayerEntity, Integer> entry = iterator.next();
+				net.minecraft.server.network.ServerPlayerEntity p = entry.getKey();
+
+				// Decrease timer
+				entry.setValue(entry.getValue() - 1);
+
+				if (entry.getValue() <= 0) {
+					iterator.remove(); // Remove them from the queue
+
+					if (!p.isDisconnected()) {
+						ServerWorld overworld = server.getWorld(World.OVERWORLD);
+						if (overworld != null) {
+							net.minecraft.util.math.BlockPos spawnPos = overworld.getSpawnPos();
+
+							// Wipe the player cache
+							com.frankloq.reset.WorldInjectionUtils.wipePlayerState(p);
+
+							// Teleport the player
+							p.teleport(
+									overworld,
+									spawnPos.getX() + 0.5,
+									spawnPos.getY(),
+									spawnPos.getZ() + 0.5,
+									0.0f,
+									0.0f
+							);
+
+							HardcoreWorldReset.LOGGER.info("Successfully rescued & wiped offline player: " + p.getName().getString());
+						}
+					}
+				}
+			}
+		}
+
 		// Advance the world reset pipeline if it is running
 		WorldResetManager.tick(server);
 
