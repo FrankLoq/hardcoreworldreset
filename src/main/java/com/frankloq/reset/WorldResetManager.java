@@ -118,15 +118,18 @@ public class WorldResetManager {
         advanceTo(ResetPhase.UNLOADING);
     }
 
+    // Fix for corrupted chunks in 1.20.6
     private static void executeUnloadPhase(MinecraftServer server) {
         HardcoreWorldReset.LOGGER.info("Phase: UNLOADING");
         server.getPlayerManager().broadcast(Text.literal("§5[Reset] §7Unloading memory cache..."), false);
 
+        // Get rid of entities
         for (RegistryKey<World> key : WorldUnloader.RESET_DIMENSIONS) {
             ServerWorld world = server.getWorld(key);
             if (world != null) WorldInjectionUtils.clearAllEntities(world);
         }
 
+        // Revoke the permanent spawn chunks memory lock
         ServerWorld overworld = server.getWorld(World.OVERWORLD);
         if (overworld != null) {
             overworld.getChunkManager().removeTicket(
@@ -134,16 +137,19 @@ public class WorldResetManager {
             );
         }
 
+        // Force save to pack the chunks securely to disk
+        server.saveAll(true, true, true);
+
+        // Tick the chunk managers to naturally process the unload queue
         for (RegistryKey<World> key : WorldUnloader.RESET_DIMENSIONS) {
             ServerWorld world = server.getWorld(key);
             if (world == null) continue;
-
             ServerChunkManager manager = world.getChunkManager();
-            try { world.save(null, true, false); } catch (Exception e) {}
-
-            for (int i = 0; i < 50; i++) manager.tick(() -> false, true);
+            for (int i = 0; i < 100; i++) manager.tick(() -> false, true);
         }
 
+        // Advance to the deleting phase after 40 ticks
+        // This wait perfectly ensures no dropped items are ticking when we wipe the ram.
         advanceTo(ResetPhase.DELETING);
     }
 
@@ -154,39 +160,23 @@ public class WorldResetManager {
         for (RegistryKey<World> key : WorldUnloader.RESET_DIMENSIONS) {
             ServerWorld world = server.getWorld(key);
             if (world != null) {
-                try { world.getChunkManager().save(true); } catch (Exception ignored) {}
+                // Now we clear the main RAM and it doesn't crash because entities are dead
+                WorldInjectionUtils.lobotomizeChunkManager(world);
+
+                // Clear the io buffer too
+                WorldInjectionUtils.lobotomizeStorageIO(world);
+
+                // Rip the file handles away from OS
                 WorldInjectionUtils.forceCloseRegionFiles(world);
             }
         }
 
-        // Fix for spawn chunks not removing correctly and causing corruption in 1.20.6
-        ServerWorld overworld = server.getWorld(World.OVERWORLD);
-        if (overworld != null) {
-            // Revoke the permanent spawn chunks memory lock from the old world
-            overworld.getChunkManager().removeTicket(
-                    net.minecraft.server.world.ChunkTicketType.START,
-                    new net.minecraft.util.math.ChunkPos(overworld.getSpawnPos()),
-                    11,
-                    net.minecraft.util.Unit.INSTANCE
-            );
-
-            // Force the chunk manager to process the unload queue 50 times
-            // This evicts the old spawn chunks out of the live ram and pushes them into the background pending save queue
-            net.minecraft.server.world.ServerChunkManager manager = overworld.getChunkManager();
-            for (int i = 0; i < 50; i++) {
-                manager.tick(() -> false, true);
-            }
-
-            // Force the server to instantly flush all background saving tasks to the disk
-            // The true parameters make the main server freeze and wait until the background workers are fully empty
-            server.saveAll(true, true, true);
-
-            // Force Java garbage collector to remove any lingering old chunk objects
-            System.gc();
-        }
+        // Force Java garbage collector to sweep up the vaporized chunk objects
+        System.gc();
 
         Path worldFolder = getWorldFolder(server);
         if (worldFolder != null) {
+
             deleteFolder(worldFolder.resolve("region"));
             deleteFolder(worldFolder.resolve("entities"));
             deleteFolder(worldFolder.resolve("poi"));
@@ -272,6 +262,25 @@ public class WorldResetManager {
             overworld.getChunkManager().addTicket(
                     ChunkTicketType.START, new ChunkPos(overworld.getSpawnPos()), 11, Unit.INSTANCE
             );
+
+            net.minecraft.util.math.BlockPos spawnPos = overworld.getSpawnPos();
+            for (net.minecraft.server.network.ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
+                if (player.getServerWorld().getRegistryKey() == com.frankloq.LimboDimension.LIMBO_KEY) {
+
+                    // Force wipe their RAM cache
+                    com.frankloq.reset.WorldInjectionUtils.wipePlayerState(player);
+
+                    // Teleport the player
+                    player.teleport(
+                            overworld,
+                            spawnPos.getX() + 0.5,
+                            spawnPos.getY(),
+                            spawnPos.getZ() + 0.5,
+                            0.0f,
+                            0.0f
+                    );
+                }
+            }
         }
 
         // I'm trying to optimize ram usage but idk if it's gonna do something
