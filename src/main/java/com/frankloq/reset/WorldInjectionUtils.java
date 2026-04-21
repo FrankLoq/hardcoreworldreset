@@ -269,4 +269,54 @@ public class WorldInjectionUtils {
             com.frankloq.HardcoreWorldReset.LOGGER.error("storage io lobotomy failed miserably", e);
         }
     }
+
+    public static void wipePlayerState(net.minecraft.server.network.ServerPlayerEntity player) {
+        player.changeGameMode(net.minecraft.world.GameMode.SURVIVAL);
+
+        player.getInventory().clear();
+        player.getEnderChestInventory().clear();
+
+        player.experienceLevel = 0;
+        player.experienceProgress = 0.0f;
+        player.setScore(0);
+
+        player.setHealth(player.getMaxHealth());
+        player.getHungerManager().setFoodLevel(20);
+        player.getHungerManager().setSaturationLevel(5.0f);
+        player.clearStatusEffects();
+
+        player.extinguish();
+
+        // Compatibility for Trinkets mod
+        if (net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("trinkets")) {
+            try {
+                // Find the Trinkets API class
+                Class<?> trinketsApi = Class.forName("dev.emi.trinkets.api.TrinketsApi");
+                java.lang.reflect.Method getComponent = trinketsApi.getMethod("getTrinketComponent", net.minecraft.entity.LivingEntity.class);
+
+                // Get the player's Trinket component
+                java.util.Optional<?> opt = (java.util.Optional<?>) getComponent.invoke(null, player);
+
+                if (opt.isPresent()) {
+                    Object trinketComponent = opt.get();
+                    java.lang.reflect.Method getInventory = trinketComponent.getClass().getMethod("getInventory");
+
+                    // Trinkets stores items in a Map<String, Map<String, TrinketInventory>>
+                    java.util.Map<?, ?> inventoryMap = (java.util.Map<?, ?>) getInventory.invoke(trinketComponent);
+
+                    // Loop through all custom accessory slots and clear them
+                    for (Object groupMapObj : inventoryMap.values()) {
+                        java.util.Map<?, ?> groupMap = (java.util.Map<?, ?>) groupMapObj;
+                        for (Object trinketInvObj : groupMap.values()) {
+                            if (trinketInvObj instanceof net.minecraft.inventory.Inventory) {
+                                ((net.minecraft.inventory.Inventory) trinketInvObj).clear();
+                            }
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                com.frankloq.HardcoreWorldReset.LOGGER.error("not wiping allat", e);
+            }
+        }
+    }
 }
