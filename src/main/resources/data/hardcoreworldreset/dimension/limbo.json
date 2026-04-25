@@ -1,5 +1,5 @@
 {
-  "type": "hardcoreworldreset:limbo",
+  "type": "minecraft:the_end",
   "generator": {
     "type": "minecraft:flat",
     "settings": {

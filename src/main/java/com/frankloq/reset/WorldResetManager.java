@@ -101,7 +101,7 @@ public class WorldResetManager {
     public static void beginReset(MinecraftServer server) {
         if (currentPhase != ResetPhase.IDLE) return;
 
-        Long fixedSeed = getFixedSeed();
+        Long fixedSeed = getFixedSeed(server);
         if (fixedSeed != null) {
             newSeed = fixedSeed;
             HardcoreWorldReset.LOGGER.info("Using seed from server.properties: {}", newSeed);
@@ -231,8 +231,8 @@ public class WorldResetManager {
 
             if (key.equals(World.OVERWORLD)) {
                 world.setTimeOfDay(0L);
-                net.minecraft.util.math.BlockPos newSpawn = WorldSpawnLocator.determineWorldSpawn(world);
-                world.setSpawnPos(newSpawn, 0.0f);
+                // net.minecraft.util.math.BlockPos newSpawn = WorldSpawnLocator.determineWorldSpawn(world);
+                world.setSpawnPos(new net.minecraft.util.math.BlockPos(0, 200, 0), 0.0f);
             }
 
             if (key.equals(World.END)) {
@@ -249,26 +249,34 @@ public class WorldResetManager {
         ServerWorld overworld = server.getWorld(World.OVERWORLD);
         if (overworld != null) {
             int spawnRadius = server.getGameRules().getInt(net.minecraft.world.GameRules.SPAWN_CHUNK_RADIUS);
+            
+            // 1. Add ticket to load chunks around 0,0 safely
+            net.minecraft.util.math.ChunkPos spawnChunk = new net.minecraft.util.math.ChunkPos(new net.minecraft.util.math.BlockPos(0, 0, 0));
             overworld.getChunkManager().addTicket(
                     net.minecraft.server.world.ChunkTicketType.START,
-                    new net.minecraft.util.math.ChunkPos(overworld.getSpawnPos()),
+                    spawnChunk,
                     spawnRadius,
                     net.minecraft.util.Unit.INSTANCE
             );
 
-            net.minecraft.util.math.BlockPos spawnPos = overworld.getSpawnPos();
+            // 2. Use native Minecraft code to find the highest solid block at 0,0
+            net.minecraft.util.math.BlockPos safeSpawnPos = overworld.getTopPosition(
+                    net.minecraft.world.Heightmap.Type.MOTION_BLOCKING_NO_LEAVES, 
+                    new net.minecraft.util.math.BlockPos(0, 0, 0)
+            );
+            overworld.setSpawnPos(safeSpawnPos, 0.0f);
+
             for (net.minecraft.server.network.ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
                 if (player.getServerWorld().getRegistryKey() == com.frankloq.LimboDimension.LIMBO_KEY) {
 
-                    // Force wipe their RAM cache
                     com.frankloq.reset.WorldInjectionUtils.wipePlayerState(player);
 
-                    // Teleport the player
+                    // 3. Teleport the player safely on top of the block
                     player.teleport(
                             overworld,
-                            spawnPos.getX() + 0.5,
-                            spawnPos.getY(),
-                            spawnPos.getZ() + 0.5,
+                            safeSpawnPos.getX() + 0.5,
+                            safeSpawnPos.getY() + 1.0, 
+                            safeSpawnPos.getZ() + 0.5,
                             0.0f,
                             0.0f
                     );
@@ -370,27 +378,24 @@ public class WorldResetManager {
         phaseTimer = PHASE_DELAY_TICKS;
     }
 
-    private static Long getFixedSeed() {
-        try {
-            Path propsPath = java.nio.file.Paths.get("server.properties");
-            if (Files.exists(propsPath)) {
-                java.util.Properties props = new java.util.Properties();
-                try (java.io.InputStream in = Files.newInputStream(propsPath)) {
-                    props.load(in);
-                    String seedStr = props.getProperty("level-seed", "").trim();
+    private static Long getFixedSeed(MinecraftServer server) {
+        // --- CONFIG CHECK ---
+        // If the config file is set to false, return null to trigger a random seed!
+        if (!com.frankloq.HardcoreWorldReset.reuseSeed) {
+            return null; 
+        }
+        // --------------------
 
-                    if (!seedStr.isEmpty()) {
-                        try {
-                            return Long.parseLong(seedStr); // If it's a pure number
-                        } catch (NumberFormatException e) {
-                            return (long) seedStr.hashCode(); // If it's a word, hash it like vanilla does
-                        }
-                    }
-                }
+        try {
+            ServerWorld overworld = server.getWorld(World.OVERWORLD);
+            if (overworld != null) {
+                long currentSeed = overworld.getSeed();
+                return currentSeed;
             }
         } catch (Exception e) {
-            HardcoreWorldReset.LOGGER.error("Failed to read server.properties", e);
+            HardcoreWorldReset.LOGGER.error("Failed to fetch current world seed", e);
         }
-        return null; // Return null if file is missing or seed is blank
+        
+        return null;
     }
 }
