@@ -56,7 +56,7 @@ public class HardcoreWorldReset implements ModInitializer {
         if (scheduledResetActive || initialScheduledMinutes > 0) {
             scheduledResetActive = false;
             scheduledResetTicks = -1;
-			initialScheduledMinutes = -1
+			initialScheduledMinutes = -1;
             stopped = true;
         }
         
@@ -142,12 +142,12 @@ public class HardcoreWorldReset implements ModInitializer {
 									int secondsLeft = scheduledResetTicks / 20;
 									int mins = secondsLeft / 60;
 									secondsLeft = secondsLeft % 60;
-									context.getSource().sendFeedback(
-											Text.literal("§eTime until scheduled reset: " + mins + " minute(s) and " + secondsLeft + " second(s)."), false
+									context.getSource().getServer().getPlayerManager().broadcast(
+											Text.literal("§aTime until scheduled reset: " + mins + " minute(s) and " + secondsLeft + " second(s)."), false
 									);
 								} else {
-									context.getSource().sendFeedback(
-											Text.literal("§aThere is no active scheduled reset."), false
+									context.getSource().getServer().getPlayerManager().broadcast(
+											Text.literal("§cThere is no active scheduled reset."), false
 									);
 								}
 								return 1;
