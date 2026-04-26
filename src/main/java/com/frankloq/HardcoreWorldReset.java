@@ -136,7 +136,7 @@ public class HardcoreWorldReset implements ModInitializer {
                                         return 1;
                                     })))
 					// 5. Show time remaining on scheduled reset
-					.then(literal("on")
+					.then(literal("timeRemaining")
 							.executes(context -> {
 								if (scheduledResetActive) {
 									int secondsLeft = scheduledResetTicks / 20;
