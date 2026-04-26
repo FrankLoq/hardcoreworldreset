@@ -36,6 +36,7 @@ public class HardcoreWorldReset implements ModInitializer {
 	public static boolean reuseSeed = false; // Reuse the same seed for each reset.
 	private static boolean scheduledResetActive = false; // Flag to indicate if a reset is currently scheduled
     private static int scheduledResetTicks = -1; // scheduled reset 
+	private static int initialScheduledMinutes = -1; // Store the initial minutes for accurate time remaining display
 	private static final java.util.Map<net.minecraft.server.network.ServerPlayerEntity, Integer> rescueQueue = new java.util.HashMap<>();
 
 	public static boolean isModEnabled() { return modEnabled; }
@@ -52,9 +53,10 @@ public class HardcoreWorldReset implements ModInitializer {
         }
         
         // Stop scheduled countdown
-        if (scheduledResetActive) {
+        if (scheduledResetActive || initialScheduledMinutes > 0) {
             scheduledResetActive = false;
             scheduledResetTicks = -1;
+			initialScheduledMinutes = -1
             stopped = true;
         }
         
@@ -120,6 +122,9 @@ public class HardcoreWorldReset implements ModInitializer {
                             .then(argument("minutes", integer(1))
                                     .executes(context -> {
                                         int mins = getInteger(context, "minutes");
+
+										// Save the initial time into memory
+                                        initialScheduledMinutes = mins;
                                         
                                         // 20 ticks = 1 second. 60 seconds = 1 minute.
                                         scheduledResetTicks = mins * 60 * 20; 
@@ -130,6 +135,23 @@ public class HardcoreWorldReset implements ModInitializer {
                                         );
                                         return 1;
                                     })))
+					// 5. Show time remaining on scheduled reset
+					.then(literal("on")
+							.executes(context -> {
+								if (scheduledResetActive) {
+									int secondsLeft = scheduledResetTicks / 20;
+									int mins = secondsLeft / 60;
+									secondsLeft = secondsLeft % 60;
+									context.getSource().sendFeedback(
+											Text.literal("§eTime until scheduled reset: " + mins + " minute(s) and " + secondsLeft + " second(s)."), false
+									);
+								} else {
+									context.getSource().sendFeedback(
+											Text.literal("§aThere is no active scheduled reset."), false
+									);
+								}
+								return 1;
+							}))
 			);
 		});
 
@@ -386,6 +408,20 @@ public class HardcoreWorldReset implements ModInitializer {
 				Text.literal("§7Try §c#" + WorldResetManager.getCurrentTry(server)),
 				false
 		);
+
+		// --- ADDED FIX: RESTART THE LOOPING TIMER ---
+        if (initialScheduledMinutes > 0) {
+            // Reset the clock to the maximum time
+            scheduledResetTicks = initialScheduledMinutes * 60 * 20;
+            scheduledResetActive = true;
+            
+            // Let the players know the clock has started!
+            server.getPlayerManager().broadcast(
+                    Text.literal("§e[System] The clock is ticking! Next reset in " + initialScheduledMinutes + " minutes."),
+                    false
+            );
+        }
+        // --------------------------------------------
 	}
 
 	public static void loadConfig() {
