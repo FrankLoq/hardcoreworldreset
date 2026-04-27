@@ -182,6 +182,18 @@ public class HardcoreWorldReset implements ModInitializer {
             if (scheduledResetTicks % 20 == 0) {
                 int secondsLeft = scheduledResetTicks / 20;
 
+				// --- ADDED: ACTION BAR TIMER ---
+                // Calculate minutes and remaining seconds for a clean 00:00 format
+                int displayMins = secondsLeft / 60;
+                int displaySecs = secondsLeft % 60;
+                String timerText = String.format("§eReset in: %02d:%02d", displayMins, displaySecs);
+
+                // Send to every player's Action Bar (the 'true' makes it go above the hotbar)
+                for (ServerPlayerEntity p : server.getPlayerManager().getPlayerList()) {
+                    p.sendMessage(Text.literal(timerText), true);
+                }
+                // -------------------------------
+
                 // Warnings
                 if (secondsLeft == 600) {
                     server.getPlayerManager().broadcast(Text.literal("§c[Warning] The world will reset in exactly 10 minutes!"), false);
