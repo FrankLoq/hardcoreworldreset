@@ -21,6 +21,9 @@ import net.minecraft.world.GameMode;
 import net.minecraft.world.World;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import static com.mojang.brigadier.arguments.IntegerArgumentType.integer;
+import static com.mojang.brigadier.arguments.IntegerArgumentType.getInteger;
+import static net.minecraft.server.command.CommandManager.argument;
 
 public class HardcoreWorldReset implements ModInitializer {
 
@@ -30,24 +33,40 @@ public class HardcoreWorldReset implements ModInitializer {
 	private static boolean resetInProgress = false;
 	private static int limboCountdownTicks = -1;
 	private static boolean modEnabled = true;
+	public static boolean reuseSeed = false; // Reuse the same seed for each reset.
+	private static boolean scheduledResetActive = false; // Flag to indicate if a reset is currently scheduled
+    private static int scheduledResetTicks = -1; // scheduled reset 
+	private static int initialScheduledMinutes = -1; // Store the initial minutes for accurate time remaining display
 	private static final java.util.Map<net.minecraft.server.network.ServerPlayerEntity, Integer> rescueQueue = new java.util.HashMap<>();
 
 	public static boolean isModEnabled() { return modEnabled; }
 
 	public static boolean cancelCountdown(MinecraftServer server) {
-		if (resetInProgress && limboCountdownTicks > 0) {
-			resetInProgress = false;
-			limboCountdownTicks = -1;
-			WorldResetManager.unlockCountdown();
-
-			return true;
-		}
-		return false;
-	}
+        boolean stopped = false;
+        
+        // Stop death countdown
+        if (resetInProgress && limboCountdownTicks > 0) {
+            resetInProgress = false;
+            limboCountdownTicks = -1;
+            WorldResetManager.unlockCountdown();
+            stopped = true;
+        }
+        
+        // Stop scheduled countdown
+        if (scheduledResetActive || initialScheduledMinutes > 0) {
+            scheduledResetActive = false;
+            scheduledResetTicks = -1;
+			initialScheduledMinutes = -1;
+            stopped = true;
+        }
+        
+        return stopped;
+    }
 
 	@Override
 	public void onInitialize() {
 		LOGGER.info("HardcoreWorldReset initialized.");
+		loadConfig();
 		ServerTickEvents.END_SERVER_TICK.register(this::onServerTick);
 
 		ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
@@ -98,6 +117,41 @@ public class HardcoreWorldReset implements ModInitializer {
 								);
 								return 1;
 							}))
+					// 4. schedule (Sets a timer in minutes)
+                    .then(literal("schedule")
+                            .then(argument("minutes", integer(1))
+                                    .executes(context -> {
+                                        int mins = getInteger(context, "minutes");
+
+										// Save the initial time into memory
+                                        initialScheduledMinutes = mins;
+                                        
+                                        // 20 ticks = 1 second. 60 seconds = 1 minute.
+                                        scheduledResetTicks = mins * 60 * 20; 
+                                        scheduledResetActive = true;
+                                        
+                                        context.getSource().getServer().getPlayerManager().broadcast(
+                                                Text.literal("§e[System] World reset scheduled for " + mins + " minutes."), false
+                                        );
+                                        return 1;
+                                    })))
+					// 5. Show time remaining on scheduled reset
+					.then(literal("timeRemaining")
+							.executes(context -> {
+								if (scheduledResetActive) {
+									int secondsLeft = scheduledResetTicks / 20;
+									int mins = secondsLeft / 60;
+									secondsLeft = secondsLeft % 60;
+									context.getSource().getServer().getPlayerManager().broadcast(
+											Text.literal("§aTime until scheduled reset: " + mins + " minute(s) and " + secondsLeft + " second(s)."), false
+									);
+								} else {
+									context.getSource().getServer().getPlayerManager().broadcast(
+											Text.literal("§cThere is no active scheduled reset."), false
+									);
+								}
+								return 1;
+							}))
 			);
 		});
 
@@ -120,6 +174,51 @@ public class HardcoreWorldReset implements ModInitializer {
 	}
 
 	private void onServerTick(MinecraftServer server) {
+		// --- SCHEDULED RESET LOGIC ---
+        if (scheduledResetActive && scheduledResetTicks > 0) {
+            scheduledResetTicks--;
+
+            // Only run checks once per second (every 20 ticks) to save performance
+            if (scheduledResetTicks % 20 == 0) {
+                int secondsLeft = scheduledResetTicks / 20;
+
+				// --- ADDED: ACTION BAR TIMER ---
+                // Calculate minutes and remaining seconds for a clean 00:00 format
+                int displayMins = secondsLeft / 60;
+                int displaySecs = secondsLeft % 60;
+                String timerText = String.format("§eReset in: %02d:%02d", displayMins, displaySecs);
+
+                // Send to every player's Action Bar (the 'true' makes it go above the hotbar)
+                for (ServerPlayerEntity p : server.getPlayerManager().getPlayerList()) {
+                    p.sendMessage(Text.literal(timerText), true);
+                }
+                // -------------------------------
+
+                // Warnings
+                if (secondsLeft == 600) {
+                    server.getPlayerManager().broadcast(Text.literal("§c[Warning] The world will reset in exactly 10 minutes!"), false);
+                } else if (secondsLeft == 300) {
+                    server.getPlayerManager().broadcast(Text.literal("§c[Warning] The world will reset in exactly 5 minutes!"), false);
+                } else if (secondsLeft == 60) {
+                    server.getPlayerManager().broadcast(Text.literal("§c[Warning] The world will reset in exactly 1 minute!"), false);
+                } else if (secondsLeft <= 5 && secondsLeft > 0) {
+                    server.getPlayerManager().broadcast(Text.literal("§c[Warning] Resetting in " + secondsLeft + "..."), false);
+                }
+            }
+
+            // Trigger Reset
+            if (scheduledResetTicks == 0) {
+                scheduledResetActive = false;
+                
+                // Try to lock the reset (prevents double-resets if someone dies at the exact same millisecond)
+                if (WorldResetManager.tryLockCountdown()) {
+                    server.getPlayerManager().broadcast(Text.literal("§4[System] Scheduled reset initiated!"), false);
+                    executeLimboTeleport(server); // Send everyone to limbo and start the wipe
+                }
+            }
+        }
+        // -----------------------------
+		
 		// Process rescue queue
 		if (!rescueQueue.isEmpty()) {
 			java.util.Iterator<java.util.Map.Entry<net.minecraft.server.network.ServerPlayerEntity, Integer>> iterator = rescueQueue.entrySet().iterator();
@@ -281,6 +380,28 @@ public class HardcoreWorldReset implements ModInitializer {
 
 		// All players are in Limbo, now begin the actual world reset
 		limboCountdownTicks = -1;
+
+		// --- ADDED CRASH FIX: CLEAR ENTITIES SAFELY ---
+        LOGGER.info("Clearing Overworld entities to prevent chunk-holder crash...");
+        ServerWorld overworld = server.getWorld(World.OVERWORLD);
+        if (overworld != null) {
+            // 1. Create a safe temporary list
+            java.util.List<net.minecraft.entity.Entity> entitiesToRemove = new java.util.ArrayList<>();
+            
+            // 2. Gather everything that isn't a player
+            for (net.minecraft.entity.Entity entity : overworld.iterateEntities()) {
+                if (entity != null && !(entity instanceof ServerPlayerEntity)) {
+                    entitiesToRemove.add(entity);
+                }
+            }
+            
+            // 3. Delete them safely outside the main iteration loop
+            for (net.minecraft.entity.Entity entity : entitiesToRemove) {
+                entity.discard();
+            }
+        }
+        // ----------------------------------------------
+
 		WorldResetManager.beginReset(server);
 	}
 
@@ -299,5 +420,47 @@ public class HardcoreWorldReset implements ModInitializer {
 				Text.literal("§7Try §c#" + WorldResetManager.getCurrentTry(server)),
 				false
 		);
+
+		// --- ADDED FIX: RESTART THE LOOPING TIMER ---
+        if (initialScheduledMinutes > 0) {
+            // Reset the clock to the maximum time
+            scheduledResetTicks = initialScheduledMinutes * 60 * 20;
+            scheduledResetActive = true;
+            
+            // Let the players know the clock has started!
+            server.getPlayerManager().broadcast(
+                    Text.literal("§e[System] The clock is ticking! Next reset in " + initialScheduledMinutes + " minutes."),
+                    false
+            );
+        }
+        // --------------------------------------------
 	}
+
+	public static void loadConfig() {
+        try {
+            // This gets the standard .minecraft/config folder
+            java.nio.file.Path configDir = net.fabricmc.loader.api.FabricLoader.getInstance().getConfigDir();
+            java.nio.file.Path configFile = configDir.resolve("hardcoreworldreset.properties");
+            java.util.Properties props = new java.util.Properties();
+
+            if (java.nio.file.Files.exists(configFile)) {
+                // If config exists, read it
+                try (java.io.InputStream in = java.nio.file.Files.newInputStream(configFile)) {
+                    props.load(in);
+                    String reuse = props.getProperty("reuse-same-seed", "true");
+                    reuseSeed = Boolean.parseBoolean(reuse);
+                    LOGGER.info("Loaded config: reuse-same-seed = " + reuseSeed);
+                }
+            } else {
+                // If it doesn't exist, create it with the default set to false
+                props.setProperty("reuse-same-seed", "false");
+                try (java.io.OutputStream out = java.nio.file.Files.newOutputStream(configFile)) {
+                    props.store(out, "Hardcore World Reset Configuration");
+                    LOGGER.info("Generated default config file.");
+                }
+            }
+        } catch (Exception e) {
+            LOGGER.error("Failed to load or generate config file", e);
+        }
+    }
 }
