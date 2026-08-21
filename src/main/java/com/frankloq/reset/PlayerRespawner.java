@@ -1,14 +1,101 @@
 package com.frankloq.reset;
 
+import com.frankloq.HardcoreWorldReset;
+import net.minecraft.block.BlockState;
+import net.minecraft.block.Blocks;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.network.packet.s2c.play.HealthUpdateS2CPacket;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.GameMode;
 import net.minecraft.world.World;
 import net.minecraft.world.chunk.ChunkStatus;
 
 public class PlayerRespawner {
+
+    public static void respawnExemptPlayer(ServerPlayerEntity player, MinecraftServer server) {
+        BlockPos personalSpawn = player.getSpawnPointPosition();
+        if (personalSpawn != null) {
+            ServerWorld personalSpawnWorld = server.getWorld(player.getSpawnPointDimension());
+            if (personalSpawnWorld == null) {
+                HardcoreWorldReset.LOGGER.warn(
+                        "Exempt player {} has a saved spawn at {} in an unavailable dimension. Using world spawn.",
+                        player.getName().getString(), personalSpawn, player.getSpawnPointDimension().getValue()
+                );
+            } else {
+                BlockState spawnBlock = personalSpawnWorld.getBlockState(personalSpawn);
+                boolean isBed = spawnBlock.getBlock() instanceof net.minecraft.block.BedBlock;
+
+                if (isBed) {
+                    HardcoreWorldReset.LOGGER.info(
+                            "Trying saved bed spawn for exempt player {} at {} in {}.",
+                            player.getName().getString(),
+                            personalSpawn,
+                            personalSpawnWorld.getRegistryKey().getValue()
+                    );
+
+                    BlockPos safePersonalSpawn = WorldSpawnLocator.findSafeSpawnNear(personalSpawnWorld, personalSpawn);
+                    if (safePersonalSpawn != null) {
+                        HardcoreWorldReset.LOGGER.info(
+                                "Respawning exempt player {} near saved spawn at {} in {}.",
+                                player.getName().getString(),
+                                safePersonalSpawn,
+                                personalSpawnWorld.getRegistryKey().getValue()
+                        );
+                        restoreAndTeleport(player, personalSpawnWorld, safePersonalSpawn);
+                        return;
+                    }
+
+                    HardcoreWorldReset.LOGGER.warn(
+                            "No safe position exists near saved spawn {} for exempt player {}. Using world spawn.",
+                            personalSpawn, player.getName().getString()
+                    );
+                } else {
+                    HardcoreWorldReset.LOGGER.warn(
+                            "Saved spawn {} for exempt player {} is no longer a bed. Using world spawn.",
+                            personalSpawn, player.getName().getString()
+                    );
+                }
+            }
+        } else {
+            HardcoreWorldReset.LOGGER.info("Exempt player {} has no saved spawn. Using world spawn.", player.getName().getString());
+        }
+
+        ServerWorld overworld = server.getWorld(World.OVERWORLD);
+        if (overworld == null) {
+            HardcoreWorldReset.LOGGER.error("Cannot respawn exempt player {} because the overworld is unavailable.", player.getName().getString());
+            return;
+        }
+
+        BlockPos worldSpawn = overworld.getSpawnPos();
+        BlockPos safeSpawn = WorldSpawnLocator.checkAndGetSafePos(overworld, worldSpawn.getX(), worldSpawn.getZ());
+        if (safeSpawn == null) {
+            int y = overworld.getTopY(net.minecraft.world.Heightmap.Type.MOTION_BLOCKING_NO_LEAVES, worldSpawn.getX(), worldSpawn.getZ());
+            safeSpawn = new BlockPos(worldSpawn.getX(), Math.max(y, 63), worldSpawn.getZ());
+            HardcoreWorldReset.LOGGER.warn("No safe position was found near world spawn. Using {} for exempt player {}.", safeSpawn, player.getName().getString());
+        } else {
+            HardcoreWorldReset.LOGGER.info("Respawning exempt player {} at world spawn fallback {}.", player.getName().getString(), safeSpawn);
+        }
+
+        restoreAndTeleport(player, overworld, safeSpawn);
+    }
+
+    private static void restoreAndTeleport(ServerPlayerEntity player, ServerWorld world, BlockPos spawn) {
+        world.getChunkManager().getChunk(spawn.getX() >> 4, spawn.getZ() >> 4, ChunkStatus.FULL, true);
+        player.setHealth(player.getMaxHealth());
+        player.getHungerManager().setFoodLevel(20);
+        player.getHungerManager().setSaturationLevel(5.0f);
+        player.networkHandler.sendPacket(new HealthUpdateS2CPacket(
+                player.getHealth(),
+                player.getHungerManager().getFoodLevel(),
+                player.getHungerManager().getSaturationLevel()
+        ));
+        player.setFireTicks(0);
+        player.fallDistance = 0.0f;
+        player.changeGameMode(GameMode.SURVIVAL);
+        player.teleport(world, spawn.getX() + 0.5, spawn.getY() + 0.1, spawn.getZ() + 0.5, 0.0f, 0.0f);
+    }
 
     public static void respawnAllPlayers(MinecraftServer server) {
         ServerWorld overworld = server.getWorld(World.OVERWORLD);

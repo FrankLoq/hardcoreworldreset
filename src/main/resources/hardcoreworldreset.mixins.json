@@ -4,6 +4,7 @@
 	"package": "com.frankloq.mixin",
 	"compatibilityLevel": "JAVA_16",
 	"mixins": [
+		"LivingEntityDropInvoker",
 		"PlayerDeathMixin",
 		"PlayerLoginMixin",
 		"RegistryBypassMixin"

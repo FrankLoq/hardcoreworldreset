@@ -2,11 +2,14 @@ package com.frankloq;
 
 import com.frankloq.reset.PlayerRespawner;
 import com.frankloq.reset.WorldResetManager;
+import com.frankloq.mixin.LivingEntityDropInvoker;
+import com.mojang.authlib.GameProfile;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
+import net.minecraft.command.argument.GameProfileArgumentType;
 import static net.minecraft.server.command.CommandManager.literal;
 import net.minecraft.entity.damage.DamageSource;
 import net.minecraft.network.packet.s2c.play.GameStateChangeS2CPacket;
@@ -16,6 +19,7 @@ import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.Text;
 import net.minecraft.world.GameMode;
+import net.minecraft.world.GameRules;
 import net.minecraft.world.World;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,6 +28,11 @@ import static com.mojang.brigadier.arguments.IntegerArgumentType.getInteger;
 import static net.minecraft.server.command.CommandManager.argument;
 import static com.mojang.brigadier.arguments.BoolArgumentType.bool;
 import static com.mojang.brigadier.arguments.BoolArgumentType.getBool;
+
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.UUID;
 
 public class HardcoreWorldReset implements ModInitializer {
 
@@ -40,6 +49,8 @@ public class HardcoreWorldReset implements ModInitializer {
 	private static boolean alwaysShowActionBar = false;
 	private static int actionBarDisplayTicks = 0; // Tracks the 5-second popup
 	private static final java.util.Map<net.minecraft.server.network.ServerPlayerEntity, Integer> rescueQueue = new java.util.HashMap<>();
+	private static boolean resetExemptionsEnabled = false;
+	private static final Set<UUID> resetExemptPlayerUuids = new HashSet<>();
 
 	public static boolean isModEnabled() { return modEnabled; }
 
@@ -68,6 +79,7 @@ public class HardcoreWorldReset implements ModInitializer {
 	@Override
 	public void onInitialize() {
 		LOGGER.info("HardcoreWorldReset initialized.");
+		loadConfig();
 		ServerTickEvents.END_SERVER_TICK.register(this::onServerTick);
 
 		ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
@@ -76,6 +88,26 @@ public class HardcoreWorldReset implements ModInitializer {
 
 		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
 			dispatcher.register(literal("hwr")
+					.then(literal("exemptions")
+							.requires(source -> source.hasPermissionLevel(2))
+							.then(literal("add")
+									.then(argument("player", GameProfileArgumentType.gameProfile())
+											.executes(context -> updateResetExemptions(
+													context.getSource(),
+													GameProfileArgumentType.getProfileArgument(context, "player"),
+													true))))
+							.then(literal("remove")
+									.then(argument("player", GameProfileArgumentType.gameProfile())
+											.executes(context -> updateResetExemptions(
+													context.getSource(),
+													GameProfileArgumentType.getProfileArgument(context, "player"),
+													false))))
+							.then(literal("on")
+									.executes(context -> setResetExemptionsEnabled(context.getSource(), true)))
+							.then(literal("off")
+									.executes(context -> setResetExemptionsEnabled(context.getSource(), false)))
+							.then(literal("list")
+									.executes(context -> listResetExemptions(context.getSource()))))
 
 					// stopCountdown (Aborts any active reset without turning off the mod)
 					.then(literal("stopCountdown")
@@ -211,6 +243,63 @@ public class HardcoreWorldReset implements ModInitializer {
 				HardcoreWorldReset.LOGGER.info("Player " + player.getName().getString() + " detected in Limbo. Rescue arriving in 1 second...");
 			}
 		});
+	}
+
+	private static int updateResetExemptions(
+			net.minecraft.server.command.ServerCommandSource source,
+			Collection<GameProfile> profiles,
+			boolean add) {
+		int changed = 0;
+
+		for (GameProfile profile : profiles) {
+			UUID uuid = profile.getId();
+			if (uuid == null) {
+				continue;
+			}
+
+			boolean didChange = add ? resetExemptPlayerUuids.add(uuid) : resetExemptPlayerUuids.remove(uuid);
+			if (didChange) {
+				changed++;
+			}
+		}
+
+		if (changed > 0) {
+			saveConfig();
+		}
+
+		int changedCount = changed;
+		String action = add ? "added to" : "removed from";
+		source.sendFeedback(
+				() -> Text.literal("§a[Reset] §7" + changedCount + " player(s) " + action + " reset exemptions."),
+				true
+		);
+		return changed;
+	}
+
+	private static int setResetExemptionsEnabled(net.minecraft.server.command.ServerCommandSource source, boolean enabled) {
+		resetExemptionsEnabled = enabled;
+		saveConfig();
+		source.sendFeedback(
+				() -> Text.literal("§a[Reset] §7Reset exemptions are now " + (enabled ? "enabled" : "disabled") + "."),
+				true
+		);
+		return 1;
+	}
+
+	private static int listResetExemptions(net.minecraft.server.command.ServerCommandSource source) {
+		String state = resetExemptionsEnabled ? "enabled" : "disabled";
+		if (resetExemptPlayerUuids.isEmpty()) {
+			source.sendFeedback(() -> Text.literal("§7[Reset] Reset exemptions are " + state + ". No players are exempt."), false);
+			return 0;
+		}
+
+		String players = resetExemptPlayerUuids.stream()
+				.map(UUID::toString)
+				.sorted()
+				.reduce((left, right) -> left + ", " + right)
+				.orElse("");
+		source.sendFeedback(() -> Text.literal("§7[Reset] Reset exemptions are " + state + ": §e" + players), false);
+		return resetExemptPlayerUuids.size();
 	}
 
 	private void onServerTick(MinecraftServer server) {
@@ -393,6 +482,29 @@ public class HardcoreWorldReset implements ModInitializer {
 		}
 	}
 
+	public static boolean isResetExempt(ServerPlayerEntity player) {
+		return resetExemptionsEnabled && resetExemptPlayerUuids.contains(player.getUuid());
+	}
+
+	public static void handleExemptHardcorePlayerDeath(ServerPlayerEntity player, DamageSource damageSource) {
+		MinecraftServer server = player.getServer();
+		if (server == null) {
+			return;
+		}
+
+		((LivingEntityDropInvoker) player).hardcoreworldreset$drop(player.getServerWorld(), damageSource);
+		player.setExperienceLevel(0);
+		player.setExperiencePoints(0);
+		player.experienceProgress = 0.0f;
+		player.totalExperience = 0;
+
+		if (player.getWorld().getGameRules().getBoolean(GameRules.SHOW_DEATH_MESSAGES)) {
+			server.getPlayerManager().broadcast(damageSource.getDeathMessage(player), false);
+		}
+		PlayerRespawner.respawnExemptPlayer(player, server);
+		LOGGER.info("Exempt Hardcore player {} died without starting a world reset.", player.getName().getString());
+	}
+
 	private static void executeLimboTeleport(MinecraftServer server) {
 		LOGGER.info("Teleporting all players to Limbo...");
 
@@ -501,12 +613,16 @@ public class HardcoreWorldReset implements ModInitializer {
 					reuseSeed = Boolean.parseBoolean(reuse);
 					String showBar = props.getProperty("always-show-action-bar", "false");
 					alwaysShowActionBar = Boolean.parseBoolean(showBar);
+					resetExemptionsEnabled = Boolean.parseBoolean(props.getProperty("reset-exemptions-enabled", "false"));
+					loadResetExemptions(props.getProperty("reset-exempt-player-uuids", ""));
 
 					LOGGER.info("Loaded config: reuse-same-seed = " + reuseSeed + ", always-show-action-bar = " + alwaysShowActionBar);
 				}
 			} else {
 				// If it doesn't exist, create it with the default set to false
 				props.setProperty("reuse-same-seed", "false");
+				props.setProperty("reset-exemptions-enabled", "false");
+				props.setProperty("reset-exempt-player-uuids", "");
 				try (java.io.OutputStream out = java.nio.file.Files.newOutputStream(configFile)) {
 					props.store(out, "Hardcore World Reset Configuration");
 					LOGGER.info("Generated default config file.");
@@ -525,6 +641,12 @@ public class HardcoreWorldReset implements ModInitializer {
 
 			props.setProperty("reuse-same-seed", String.valueOf(reuseSeed));
 			props.setProperty("always-show-action-bar", String.valueOf(alwaysShowActionBar));
+			props.setProperty("reset-exemptions-enabled", String.valueOf(resetExemptionsEnabled));
+			props.setProperty("reset-exempt-player-uuids", resetExemptPlayerUuids.stream()
+					.map(UUID::toString)
+					.sorted()
+					.reduce((left, right) -> left + "," + right)
+					.orElse(""));
 
 			try (java.io.OutputStream out = java.nio.file.Files.newOutputStream(configFile)) {
 				props.store(out, "Hardcore World Reset Configuration");
@@ -532,6 +654,21 @@ public class HardcoreWorldReset implements ModInitializer {
 			}
 		} catch (Exception e) {
 			LOGGER.error("Failed to save config file!", e);
+		}
+	}
+
+	private static void loadResetExemptions(String storedUuids) {
+		resetExemptPlayerUuids.clear();
+		if (storedUuids.isBlank()) {
+			return;
+		}
+
+		for (String storedUuid : storedUuids.split(",")) {
+			try {
+				resetExemptPlayerUuids.add(UUID.fromString(storedUuid.trim()));
+			} catch (IllegalArgumentException e) {
+				LOGGER.warn("Ignoring invalid reset exemption UUID: {}", storedUuid);
+			}
 		}
 	}
 }

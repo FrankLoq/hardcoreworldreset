@@ -23,6 +23,14 @@ public abstract class PlayerDeathMixin {
 			return; // The mod is off, let the game handle the death normally.
 		}
 
+		if (HardcoreWorldReset.isResetExempt(player)) {
+			if (player.getServer() != null && player.getServer().isHardcore()) {
+				ci.cancel();
+				HardcoreWorldReset.handleExemptHardcorePlayerDeath(player, damageSource);
+			}
+			return;
+		}
+
 		HardcoreWorldReset.LOGGER.info(
 				"MIXIN FIRED for player: {}",
 				player.getName().getString()

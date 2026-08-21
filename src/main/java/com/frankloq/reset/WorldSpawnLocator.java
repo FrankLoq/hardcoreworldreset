@@ -80,8 +80,24 @@ public class WorldSpawnLocator {
         return null; // The entire chunk grid was unsafe
     }
 
+    public static BlockPos findSafeSpawnNear(ServerWorld world, BlockPos center) {
+        for (int offsetX = -1; offsetX <= 1; offsetX++) {
+            for (int offsetZ = -1; offsetZ <= 1; offsetZ++) {
+                for (int offsetY = 0; offsetY <= 2; offsetY++) {
+                    BlockPos candidate = center.add(offsetX, offsetY, offsetZ);
+                    world.getChunkManager().getChunk(candidate.getX() >> 4, candidate.getZ() >> 4, ChunkStatus.FULL, true);
+                    if (isValidSpawnBlock(world, candidate)) {
+                        return candidate;
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
     // Definitive fix for the player spawning crawling or in dangerous blocks
-    private static boolean isValidSpawnBlock(ServerWorld world, BlockPos pos) {
+    public static boolean isValidSpawnBlock(ServerWorld world, BlockPos pos) {
         BlockState under = world.getBlockState(pos.down());
         BlockState feet = world.getBlockState(pos);
         BlockState head = world.getBlockState(pos.up());
