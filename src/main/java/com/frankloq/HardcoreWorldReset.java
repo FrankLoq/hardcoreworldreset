@@ -4,6 +4,7 @@ import com.frankloq.reset.PlayerRespawner;
 import com.frankloq.reset.WorldResetManager;
 import com.frankloq.mixin.LivingEntityDropInvoker;
 import com.mojang.authlib.GameProfile;
+import me.lucko.fabric.api.permissions.v0.Permissions;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
@@ -51,6 +52,11 @@ public class HardcoreWorldReset implements ModInitializer {
 	private static final java.util.Map<net.minecraft.server.network.ServerPlayerEntity, Integer> rescueQueue = new java.util.HashMap<>();
 	private static boolean resetExemptionsEnabled = false;
 	private static final Set<UUID> resetExemptPlayerUuids = new HashSet<>();
+	private static final String PERMISSION_EXEMPTIONS_ADD = "hardcoreworldreset.exemptions.add";
+	private static final String PERMISSION_EXEMPTIONS_REMOVE = "hardcoreworldreset.exemptions.remove";
+	private static final String PERMISSION_EXEMPTIONS_LIST = "hardcoreworldreset.exemptions.list";
+	private static final String PERMISSION_EXEMPTIONS_ENABLE = "hardcoreworldreset.exemptions.enable";
+	private static final String PERMISSION_EXEMPTIONS_DISABLE = "hardcoreworldreset.exemptions.disable";
 
 	public static boolean isModEnabled() { return modEnabled; }
 
@@ -89,24 +95,28 @@ public class HardcoreWorldReset implements ModInitializer {
 		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
 			dispatcher.register(literal("hwr")
 					.then(literal("exemptions")
-							.requires(source -> source.hasPermissionLevel(2))
 							.then(literal("add")
+									.requires(Permissions.require(PERMISSION_EXEMPTIONS_ADD, 2))
 									.then(argument("player", GameProfileArgumentType.gameProfile())
 											.executes(context -> updateResetExemptions(
 													context.getSource(),
 													GameProfileArgumentType.getProfileArgument(context, "player"),
 													true))))
 							.then(literal("remove")
+									.requires(Permissions.require(PERMISSION_EXEMPTIONS_REMOVE, 2))
 									.then(argument("player", GameProfileArgumentType.gameProfile())
 											.executes(context -> updateResetExemptions(
 													context.getSource(),
 													GameProfileArgumentType.getProfileArgument(context, "player"),
 													false))))
 							.then(literal("on")
+									.requires(Permissions.require(PERMISSION_EXEMPTIONS_ENABLE, 2))
 									.executes(context -> setResetExemptionsEnabled(context.getSource(), true)))
 							.then(literal("off")
+									.requires(Permissions.require(PERMISSION_EXEMPTIONS_DISABLE, 2))
 									.executes(context -> setResetExemptionsEnabled(context.getSource(), false)))
 							.then(literal("list")
+									.requires(Permissions.require(PERMISSION_EXEMPTIONS_LIST, 2))
 									.executes(context -> listResetExemptions(context.getSource()))))
 
 					// stopCountdown (Aborts any active reset without turning off the mod)
