@@ -80,6 +80,27 @@ public final class PlayerDataStore {
 		return List.copyOf(playerRecords.values());
 	}
 
+	public boolean addOrUpdatePlayer(UUID uuid, String name) {
+		if (loadFailed) {
+			return false;
+		}
+
+		PlayerRecord record = playerRecords.get(uuid);
+		if (record == null) {
+			playerRecords.put(uuid, new PlayerRecord(uuid, name, false));
+			save();
+			return true;
+		}
+
+		if (Objects.equals(record.getName(), name)) {
+			return false;
+		}
+
+		record.setName(name);
+		save();
+		return true;
+	}
+
 	public boolean addOrUpdateResetExemption(UUID uuid, String name) {
 		PlayerRecord record = playerRecords.get(uuid);
 		if (record == null) {
@@ -94,18 +115,13 @@ public final class PlayerDataStore {
 		return changed;
 	}
 
-	public boolean remove(UUID uuid) {
-		return playerRecords.remove(uuid) != null;
-	}
-
-	public boolean refreshName(UUID uuid, String name) {
+	public boolean clearResetExemption(UUID uuid) {
 		PlayerRecord record = playerRecords.get(uuid);
-		if (record == null || Objects.equals(record.getName(), name)) {
+		if (record == null || !record.isResetExempt()) {
 			return false;
 		}
 
-		record.setName(name);
-		save();
+		record.setResetExempt(false);
 		return true;
 	}
 

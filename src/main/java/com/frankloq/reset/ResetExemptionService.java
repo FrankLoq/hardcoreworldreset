@@ -62,7 +62,7 @@ public final class ResetExemptionService {
 		int changed = 0;
 		for (GameProfile profile : profiles) {
 			UUID uuid = profile.getId();
-			if (uuid != null && playerDataStore.remove(uuid)) {
+			if (uuid != null && playerDataStore.clearResetExemption(uuid)) {
 				changed++;
 			}
 		}
@@ -79,9 +79,14 @@ public final class ResetExemptionService {
 				.orElse(false);
 	}
 
-	public void refreshTrackedPlayerName(ServerPlayerEntity player) {
+	public void registerPlayer(ServerPlayerEntity player) {
+		if (!playerDataStore.isAvailable()) {
+			return;
+		}
+
+		boolean alreadyKnown = playerDataStore.find(player.getUuid()).isPresent();
 		String currentName = player.getName().getString();
-		if (playerDataStore.refreshName(player.getUuid(), currentName)) {
+		if (playerDataStore.addOrUpdatePlayer(player.getUuid(), currentName) && alreadyKnown) {
 			logger.info("Refreshed saved name for tracked player {}: {}", player.getUuid(), currentName);
 		}
 	}

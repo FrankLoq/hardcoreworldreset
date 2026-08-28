@@ -247,7 +247,7 @@ public class HardcoreWorldReset implements ModInitializer {
 		// Fix for player getting stuck in the Limbo if they leave after the DELETING phase
 		ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
 			net.minecraft.server.network.ServerPlayerEntity player = handler.player;
-			getResetExemptionService().refreshTrackedPlayerName(player);
+			getResetExemptionService().registerPlayer(player);
 
 			// Check if the player logging in is trapped in Limbo
 			if (player.getServerWorld().getRegistryKey() == com.frankloq.LimboDimension.LIMBO_KEY) {
